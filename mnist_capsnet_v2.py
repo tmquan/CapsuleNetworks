@@ -55,14 +55,12 @@ class Model(ModelDesc):
 		X = tf.expand_dims(X, 3)
 
 		X = X * 2 - 1   # center the pixels values at zero
-		#########################################################################################################
-		# v_length = 0
-		#########################################################################################################
+		# First convolutional layer, return [batch_size, 20, 20, 256]
 		with tf.variable_scope('Conv1_layer'):
 			# Conv1, [batch_size, 20, 20, 256]
 			conv1 = tf.layers.conv2d(X, filters=256,
-									 kernel_size=9, strides=(1,1),
-									 padding='VALID')
+						 kernel_size=9, strides=(1,1),
+						 padding='VALID')
 			# print conv1.get_shape()
 			assert conv1.get_shape() == [BATCH_SIZE, 20, 20, 256]
 
@@ -84,7 +82,7 @@ class Model(ModelDesc):
 			# a). calc ||v_c||, then do softmax(||v_c||)
 			# [batch_size, 10, 16, 1] => [batch_size, 10, 1, 1]
 			v_length = tf.sqrt(tf.reduce_sum(tf.square(caps2),
-												  axis=2, keep_dims=True) + epsilon)
+							 axis=2, keep_dims=True) + epsilon)
 			softmax_v = tf.nn.softmax(v_length, dim=1)
 			assert softmax_v.get_shape() == [BATCH_SIZE, 10, 1, 1]
 
