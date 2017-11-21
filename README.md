@@ -19,7 +19,7 @@ https://arxiv.org/abs/1710.09829
  ```
  
  ## Training
- ```python
+ ```bash
  python mnist_capsnet_v2.py --gpu='0'
  ```
  
