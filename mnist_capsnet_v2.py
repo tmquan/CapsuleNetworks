@@ -160,13 +160,7 @@ class Model(ModelDesc):
 
 
 
-		# train_summary = []
-		# train_summary.append(tf.summary.scalar('margin_loss', margin_loss))
-		# train_summary.append(tf.summary.scalar('reconstruction_loss', reconstruction_err))
-		# train_summary.append(tf.summary.scalar('total_loss', total_loss))
-		# recon_img = tf.reshape(decoded, shape=(BATCH_SIZE, 28, 28, 1))
-		# train_summary.append(tf.summary.image('reconstruction_img', recon_img))
-		# train_summary = tf.summary.merge(train_summary)
+		# summary
 		summary.add_moving_summary(margin_loss)
 		summary.add_moving_summary(reconstruction_err)
 		summary.add_moving_summary(total_loss)
@@ -181,49 +175,6 @@ class Model(ModelDesc):
 		batch_accuracy 	   = tf.reduce_sum(tf.cast(correct_prediction, tf.float32))
 		# test_acc = tf.placeholder_with_default(tf.constant(0.), shape=[])
 
-
-		#########################################################################################################
-		# # The context manager `argscope` sets the default option for all the layers under
-		# # this context. Here we use 32 channel convolution with shape 3x3
-		# with argscope(Conv2D, kernel_shape=3, nl=tf.nn.relu, out_channel=32):
-		# 	logits = (LinearWrap(image)
-		# 			  .Conv2D('conv0')
-		# 			  .MaxPooling('pool0', 2)
-		# 			  .Conv2D('conv1')
-		# 			  .Conv2D('conv2')
-		# 			  .MaxPooling('pool1', 2)
-		# 			  .Conv2D('conv3')
-		# 			  .FullyConnected('fc0', 512, nl=tf.nn.relu)
-		# 			  .Dropout('dropout', 0.5)
-		# 			  .FullyConnected('fc1', out_dim=10, nl=tf.identity)())
-
-		# tf.nn.softmax(logits, name='prob')   # a Bx10 with probabilities
-
-		# # a vector of length B with loss of each sample
-		# cost = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=label)
-		# cost = tf.reduce_mean(cost, name='cross_entropy_loss')  # the average cross-entropy loss
-
-		# correct = tf.cast(tf.nn.in_top_k(logits, label, 1), tf.float32, name='correct')
-		# accuracy = tf.reduce_mean(correct, name='accuracy')
-
-		# # This will monitor training error (in a moving_average fashion):
-		# # 1. write the value to tensosrboard
-		# # 2. write the value to stat.json
-		# # 3. print the value after each epoch
-		# train_error = tf.reduce_mean(1 - correct, name='train_error')
-		# summary.add_moving_summary(train_error, accuracy)
-
-		# # Use a regex to find parameters to apply weight decay.
-		# # Here we apply a weight decay on all W (weight matrix) of all fc layers
-		# wd_cost = tf.multiply(1e-5,
-		# 					  regularize_cost('fc.*/W', tf.nn.l2_loss),
-		# 					  name='regularize_loss')
-		# self.cost = tf.add_n([wd_cost, cost], name='total_cost')
-		# summary.add_moving_summary(cost, wd_cost, self.cost)
-
-		# # monitor histogram of all weight (of conv and fc layers) in tensorboard
-		# summary.add_param_summary(('.*/W', ['histogram', 'rms']))
-		#########################################################################################################
 	def _get_optimizer(self):
 		lr = tf.train.exponential_decay(
 			learning_rate=1e-3,
@@ -237,17 +188,6 @@ class Model(ModelDesc):
 
 
 def get_data():
-	# def f(dp):
-	# 	im = dp[0][:, :, None]
-	# 	onehot = np.zeros(10, dtype='int32')
-	# 	onehot[dp[1]] = 1
-	# 	return [im, onehot]
-
-	# train 	= BatchData(MapData(dataset.Mnist('train'), f), 128)
-	# test 	= BatchData(MapData(dataset.Mnist('test'), f), 128)
-	# train = PrintData(train)
-	# test  = PrintData(test )
-	# return train, test
 	train = BatchData(dataset.Mnist('train'), BATCH_SIZE)
 	test =  BatchData(dataset.Mnist('test'), BATCH_SIZE, remainder=False)
 	train = PrefetchDataZMQ(train, BATCH_SIZE)
