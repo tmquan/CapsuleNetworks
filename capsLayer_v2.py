@@ -52,7 +52,7 @@ class CapsLayer(object):
                 for i in range(self.vec_len):
                     # each capsule i: [batch_size, 6, 6, 32]
                     with tf.variable_scope('ConvUnit_' + str(i)):
-                        caps_i = tf.contrib.layers.conv2d(input, self.num_outputs,
+                        caps_i = tf.layers.conv2d(input, self.num_outputs,
                                                           self.kernel_size, self.stride,
                                                           padding="VALID", activation_fn=None)
                         caps_i = tf.reshape(caps_i, shape=(cfg.batch_size, -1, 1, 1))
@@ -67,10 +67,10 @@ class CapsLayer(object):
                 # PrimaryCap convolution does a ReLU activation or not before
                 # squashing function, but experiment show that using ReLU get a
                 # higher test accuracy. So, which one to use will be your choice
-                capsules = tf.contrib.layers.conv2d(input, self.num_outputs * self.vec_len,
+                capsules = tf.layers.conv2d(input, self.num_outputs * self.vec_len,
                                                     self.kernel_size, self.stride, padding="VALID",
                                                     activation_fn=tf.nn.relu)
-                # capsules = tf.contrib.layers.conv2d(input, self.num_outputs * self.vec_len,
+                # capsules = tf.layers.conv2d(input, self.num_outputs * self.vec_len,
                 #                                    self.kernel_size, self.stride,padding="VALID",
                 #                                    activation_fn=None)
                 capsules = tf.reshape(capsules, (cfg.batch_size, -1, self.vec_len, 1))
@@ -192,7 +192,7 @@ def fully_connected(inputs,
                     num_outputs,
                     vec_len,
                     with_routing=True,
-                    weights_initializers=tf.contrib.layers.xavier_initializer(),
+                    weights_initializers=tf.layers.xavier_initializer(),
                     reuse=None,
                     variable_collections=None,
                     scope=None):
