@@ -7,8 +7,7 @@ import argparse
 import tensorflow as tf
 from capsLayer import *
 """
-MNIST ConvNet example.
-about 0.6% validation error after 30 epochs.
+MNIST CapsNet example.
 """
 
 os.environ['TENSORPACK_TRAIN_API'] = 'v2'   # will become default soon
