@@ -1,9 +1,11 @@
 # CapsuleNetworks
- A light-way system-wrapper of Capsule Layers using tensorpack
+A light-way system-wrapper of Capsule Layers using tensorpack
  
- This code is mainly borrowed on mnist_convnet.py from @ppwwyyxx and CapsLayer.py from @naturomics 
+This code is mainly borrowed on mnist_convnet.py from @ppwwyyxx and CapsLayer.py from @naturomics 
  
- Paper https://arxiv.org/abs/1710.09829
+Paper: Dynamic Routing Between Capsules by Sara Sabour, Nicholas Frosst, Geoffrey E Hinton 
+
+https://arxiv.org/abs/1710.09829
  
 <p align="center">
   <img src="/images/Architecture.PNG">
