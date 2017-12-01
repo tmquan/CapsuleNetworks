@@ -47,8 +47,79 @@ class Model(ModelDesc):
 		# NHWC. Add a single channel here.
 		X = tf.expand_dims(X, 3)
 
-		X = X/255.0   # center the pixels values at zero
+		X = X/255.0   # Normalize between 0 and 1
 		
+		#
+		### Primary Capsules
+		#
+		"""
+		The first layer will be composed of 32 maps of 6x6 capsules each, 
+		where each capsule will putput an 8D activation vector
+		"""
+		caps1_n_maps = 32
+		caps1_n_caps = 6 * 6 * caps1_n_maps # 1152 primamry capsules
+		caps1_n_dims = 8 
+
+		# To compute their outputs, we first apply two regular convolutional layers
+		conv1_params = {
+			"filters"		:	256,
+			"kernel_size"	:	9,
+			"strides"		:	1,
+			"padding"		:	"valid",
+			"activation"	: 	tf.nn.relu,
+		}
+
+		conv2_params = {
+			"filters"		: 	caps1_n_maps * caps1_n_dims,  # 32 * 8 = 256 convolutional filters
+			"kernel_size"	:	9,
+			"strides"		: 	2,
+			"padding"		: 	"valid",
+			"activation"	:	tf.nn.relu,
+		}
+
+		conv1 = tf.layers.conv2d(name="conv1", **conv1_params, inputs=X)
+		conv2 = tf.layers.conv2d(name="conv2", **conv2_params, inputs=conv1)
+		"""
+		Note: since we used a kernel size of 9 and no padding, the image shrunk by 9-1=8 pixels
+		28x28 to 20x20, 20x20 to 12x12
+		and since we used a stride of 2 in the second convolutional layer,
+		we end up with 6x6 feature maps (6x6 vector output)
+		"""
+
+		"""
+		Next we reshape the output to get a bunch of 8D vectors representing the output of the 
+		primary capsules. The output of conv2 is an array containing 32x8=256 feature maps for
+		each instance, where each feature map is 6x6. So the shape of this output is (batch_size, 
+		6, 6, 256).
+
+		We can reshape to (batch_size, 6, 6, 32, 8) to divide 256 into 32 vectors of 8 dimension each.
+		However, since the first capsule layer will be fully connected to the next capsule layer, 
+		we can simply flatten the 6x6 grids. Equivalenly, we just need to reshape to (batch_size, 
+		6x6x32, 8)
+		"""
+		caps1_raw = tf.reshape(conv2, [-1, caps1_n_caps, caps1_n_dims], name="caps1_raw")
+
+
+		"""
+		We need to squash these vectors. Let us define the squash function, based on the equation.
+		The squash() function will squash all the vectors in the given array, along a given axis (by 
+		default, the last axis).
+
+		Caution, a nasty bug is waiting to bite you: the derivative of ||s|| is undefined when ||s|| = 0, 
+		so we can not just use tf.norm(), or else. The solution is to compute the safe_norm
+		"""
+		def squash(s, axis=-1, epsilon=1e-7, name=None):
+			with tf.name_scope(name, default_name='squash'):
+				squared_norm 	= tf.reduce_sum(tf.square(s), axis=axis, keep_dims=True)
+				safe_norm 		= tf.sqrt(squared_norm+epsilon)
+				squash_vector 	= squared_norm / (1.0 + squared_norm)
+				unit_vector 	= s / safe_norm
+				return squash_vector * unit_vector
+
+		"""
+		Now let us apply this function the get the ouput u_i of each primary capsule i
+		"""
+		caps1_out = squash(caps1_raw, name="caps1_output")
 
 
 		self.cost = tf.identity(0., name='total_costs')
@@ -63,6 +134,7 @@ class Model(ModelDesc):
 def get_data():
 	train = BatchData(dataset.Mnist('train'), BATCH_SIZE)
 	test  = BatchData(dataset.Mnist('test'),  BATCH_SIZE, remainder=False)
+	# print(np.max(train))
 	train = PrintData(train)
 	test  = PrintData(test)
 	train = PrefetchDataZMQ(train, BATCH_SIZE)
