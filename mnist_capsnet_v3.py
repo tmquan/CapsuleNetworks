@@ -164,18 +164,17 @@ class Model(ModelDesc):
 		We initialize this variable randomly using a normal distribution with a standard deviation to 0.01.
 		"""
 		init_sigma 	= 	0.01
-		# W_init 		= 	tf.random_normal(shape 	=	(1, caps1_n_caps, caps2_n_caps, caps2_n_dims, caps1_n_dims), 
-		# 								 stddev	=	init_sigma, 
-		# 								 dtype	=	tf.float32, 
-		# 								 name 	= 	"W_init",
-		# 					)
-		# W = tf.get_variable(name="W", initializer=W_init)
-		# W = tf.Variable(W_init, name="W") 
-		W 		= 	tf.random_normal(shape 	=	(1, caps1_n_caps, caps2_n_caps, caps2_n_dims, caps1_n_dims), 
-									 stddev	=	init_sigma, 
-									 dtype	=	tf.float32, 
-									 name 	= 	"W_init",
-						)
+		W_init 		= 	tf.random_normal(shape 	=	(1, caps1_n_caps, caps2_n_caps, caps2_n_dims, caps1_n_dims), 
+										 stddev	=	init_sigma, 
+										 dtype	=	tf.float32, 
+										 name 	= 	"W_init",
+							)
+		W = tf.get_variable(name="W", initializer=W_init)
+		# W 		= 	tf.random_normal(shape 	=	(1, caps1_n_caps, caps2_n_caps, caps2_n_dims, caps1_n_dims), 
+		# 							 stddev	=	init_sigma, 
+		# 							 dtype	=	tf.float32, 
+		# 							 name 	= 	"W_init",
+		# 				)
 
 		###Now we can create the first array by repeating W once per instance:
 		batch_size = tf.shape(X)[0]
@@ -209,7 +208,80 @@ class Model(ModelDesc):
 		# and for each pair of first and second layer capsules (1152x10) we have a 16D predicted 
 		# output column vector (16×1). We're ready to apply the routing by agreement algorithm!
 
+		#
+		# Routing by agreement
+		#
+		# First, let us initialize the raw routing weights b_ij to zero
+		raw_weights = tf.zeros([batch_size, caps1_n_caps, caps2_n_caps, 1, 1], 
+						dtype	= 	tf.float32,
+						name 	= 	"raw_weights")
 
+		### Round 1
+		#First, let's apply the softmax function to compute the routing weights, 
+		# c_i = softmax(b_i) (equation (3) in the paper):
+		routing_weights = tf.nn.softmax(raw_weights, dim=2, name="routing_weights")
+
+		# Compute the weighted sum
+		weighted_predictions = tf.multiply(routing_weights, caps2_predicted, name="weighted_predictions")
+		weighted_sum = tf.reduce_sum(weighted_predictions, axis=1, keep_dims=True, name="weighted_sum")
+
+		"""
+		There are a couple important details to note here:
+		
+		To perform elementwise matrix multiplication (also called the Hadamard product, noted $\circ$), 
+		we use the tf.multiply() function. It requires routing_weights and caps2_predicted to have the same rank, 
+		which is why we added two extra dimensions of size 1 to routing_weights, earlier.
+		
+		The shape of routing_weights is (batch size, 1152, 10, 1, 1) 
+		while the shape of caps2_predicted is (batch size, 1152, 10, 16, 1). 
+		Since they don't match on the fourth dimension (1 vs 16), 
+		tf.multiply() automatically broadcasts the routing_weights 16 times along that dimension. 
+		"""
+
+		# And finally, let us apply the squash function to get the outputs of the second layer 
+		# capsules at the end of the first iteration of the routing by agreement algorithm, 
+		# v_j = squash(s_j) :
+		caps2_output_round_1 = squash(weighted_sum, axis=-2, name="caps2_output_round_1")
+		print(caps2_output_round_1)
+
+
+		### Round 2
+		"""
+		First, let's measure how close each predicted vector u^_j|i is to the actual output vector v_j 
+		by computing their scalar product u^_j|i x v_j.
+		Quick math reminder: if $\vec{a}$ and $\vec{b}$ are two vectors of equal length, 
+		and $\mathbf{a}$ and $\mathbf{b}$ are their corresponding column vectors (i.e., matrices with a single column), 
+		then $\mathbf{a}^T \mathbf{b}$ (i.e., the matrix multiplication of the transpose of $\mathbf{a}$, and $\mathbf{b}$) 
+		is a 1x1 matrix containing the scalar product of the two vectors $\vec{a}\cdot\vec{b}$. 
+		In Machine Learning, we generally represent vectors as column vectors, so when we talk about computing 
+		the scalar product $\hat{\mathbf{u}}_{j|i} \cdot \mathbf{v}_j$, this actually means computing ${\hat{\mathbf{u}}_{j|i}}^T \mathbf{v}_j$.
+		Since we need to compute the scalar product $\hat{\mathbf{u}}_{j|i} \cdot \mathbf{v}_j$ for each instance, and for each pair of first and second level capsules $(i, j)$, we will once again take advantage of the fact that tf.matmul() can multiply many matrices simultaneously. This will require playing around with tf.tile() to get all dimensions to match (except for the last 2), just like we did earlier. So let's look at the shape of caps2_predicted, which holds all the predicted output vectors $\hat{\mathbf{u}}_{j|i}$ for each instance and each pair of capsules:
+		"""
+		print(caps2_predicted) # u^_j|i
+		print(caps2_output_round_1) # v_j
+
+		# To get these shapes to match, we just need to tile the caps2_output_round_1 array 1152 times 
+		# (once per primary capsule) along the second dimension:	
+		caps2_output_round_1_tiled = tf.tile(caps2_output_round_1, [1, caps1_n_caps, 1, 1, 1],  name="caps2_output_round_1_tiled")
+
+		# And now we are ready to call tf.matmul() (note that we must tell it to transpose the matrices in the first array, 
+		# to get ${\hat{\mathbf{u}}_{j|i}}^T$ instead of $\hat{\mathbf{u}}_{j|i}$):
+		agreement = tf.matmul(caps2_predicted, caps2_output_round_1_tiled,
+							  transpose_a=True, name="agreement")
+
+
+		"""We can now update the raw routing weights $b_{i,j}$ by simply adding the scalar product 
+		$\hat{\mathbf{u}}_{j|i} \cdot \mathbf{v}_j$ we just computed: 
+		$b_{i,j} \gets b_{i,j} + \hat{\mathbf{u}}_{j|i} \cdot \mathbf{v}_j$ (see Procedure 1, step 7, in the paper).
+		"""
+		raw_weights_round_2 = tf.add(raw_weights, agreement, name="raw_weights_round_2")
+		routing_weights_round_2 = tf.nn.softmax(raw_weights_round_2, dim=2, name="routing_weights_round_2")
+		weighted_predictions_round_2 = tf.multiply(routing_weights_round_2, caps2_predicted, name="weighted_predictions_round_2")
+		weighted_sum_round_2 = tf.reduce_sum(weighted_predictions_round_2, axis=1, keep_dims=True, name="weighted_sum_round_2")
+		caps2_output_round_2 = squash(weighted_sum_round_2, axis=-2, name="caps2_output_round_2")
+		# We could go on for a few more rounds, by repeating exactly the same steps as in round 2
+		caps2_output = caps2_output_round_2
+		
 		# Compute the loss
 		self.cost = tf.identity(0., name='total_costs')
 		summary.add_moving_summary(self.cost)
