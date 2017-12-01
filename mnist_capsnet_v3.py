@@ -49,6 +49,9 @@ class Model(ModelDesc):
 
 		X = X/255.0   # Normalize between 0 and 1
 		
+
+
+
 		#
 		### Primary Capsules
 		#
@@ -77,8 +80,8 @@ class Model(ModelDesc):
 			"activation"	:	tf.nn.relu,
 		}
 
-		conv1 = tf.layers.conv2d(name="conv1", **conv1_params, inputs=X)
-		conv2 = tf.layers.conv2d(name="conv2", **conv2_params, inputs=conv1)
+		conv1 = tf.layers.conv2d(inputs=X, 		name="conv1", **conv1_params)
+		conv2 = tf.layers.conv2d(inputs=conv1, 	name="conv2", **conv2_params)
 		"""
 		Note: since we used a kernel size of 9 and no padding, the image shrunk by 9-1=8 pixels
 		28x28 to 20x20, 20x20 to 12x12
@@ -119,9 +122,95 @@ class Model(ModelDesc):
 		"""
 		Now let us apply this function the get the ouput u_i of each primary capsule i
 		"""
-		caps1_out = squash(caps1_raw, name="caps1_output")
+		caps1_output = squash(caps1_raw, name="caps1_output")
 
 
+		#
+		### Digit Capsules
+		#
+		"""
+		To compute the output of the digit capsules, we must first compute the predicted output
+		vectors (one for reach primary/digit capsule pair). 
+		Then we can run the routing by agreement algorithm. 
+		"""
+		### Compute the predicted output vectors.
+		# The digit capsule layer contains 10 capsules (one for each digit) of 16 dimension each
+		caps2_n_caps = 10
+		caps2_n_dims = 16
+
+		"""
+		For each capsule i in the first layer, we want to predict the output of every capsule j in 
+		the second layer. For this, we will need a transformation matrix W_i (one for each pair of
+		capsules (i, j)), then we can compute the predicted output u^j|i = W_ij * u_i .
+		Since we want to transform an 8D vector into a 16D vector, each transformation W_ij must 
+		have a shape (16x8). 
+
+		We can use tf.matmul() to perform matrix-wise multiplication to compute u^j|i for every pair
+		of capsules (i, j) 
+
+
+		The shape of the first array is (1152, 10, 16, 8), and the shape of the second array is (1152, 10, 8, 1). 
+		Note that the second array must contain 10 identical copies of the vectors $\mathbf{u}_1$ to $\mathbf{u}_{1152}$. 
+		To create this array, we will use the handy tf.tile() function, which lets you create an array containing many copies of a base array, 
+		tiled in any way you want.
+		Oh, wait a second! We forgot one dimension: batch size. Say we feed 50 images to the capsule network, 
+		it will make predictions for these 50 images simultaneously. So the shape of the first array must be 
+		(50, 1152, 10, 16, 8), and the shape of the second array must be (50, 1152, 10, 8, 1). 
+		The first layer capsules actually already output predictions for all 50 images, so the second array will be fine, 
+		but for the first array, we will need to use tf.tile() to have 50 copies of the transformation matrices.
+
+		Okay, let's start by creating a trainable variable of shape (1, 1152, 10, 16, 8) that will hold all the transformation matrices. 
+		The first dimension of size 1 will make this array easy to tile. 
+		We initialize this variable randomly using a normal distribution with a standard deviation to 0.01.
+		"""
+		init_sigma 	= 	0.01
+		# W_init 		= 	tf.random_normal(shape 	=	(1, caps1_n_caps, caps2_n_caps, caps2_n_dims, caps1_n_dims), 
+		# 								 stddev	=	init_sigma, 
+		# 								 dtype	=	tf.float32, 
+		# 								 name 	= 	"W_init",
+		# 					)
+		# W = tf.get_variable(name="W", initializer=W_init)
+		# W = tf.Variable(W_init, name="W") 
+		W 		= 	tf.random_normal(shape 	=	(1, caps1_n_caps, caps2_n_caps, caps2_n_dims, caps1_n_dims), 
+									 stddev	=	init_sigma, 
+									 dtype	=	tf.float32, 
+									 name 	= 	"W_init",
+						)
+
+		###Now we can create the first array by repeating W once per instance:
+		batch_size = tf.shape(X)[0]
+		W_tiled = tf.tile(W, [batch_size, 1, 1, 1, 1], name="W_tiled")
+
+
+		"""
+		As discussed earlier, we need to create an array of shape (batch size, 1152, 10, 8, 1), 
+		containing the output of the first layer capsules, repeated 10 times 
+		(once per digit, along the third dimension, which is axis=2). 
+		The caps1_output array has a shape of (batch size, 1152, 8), 
+		so we first need to expand it twice, to get an array of shape (batch size, 1152, 1, 8, 1), 
+		then we can repeat it 10 times along the third dimension:
+		"""
+		caps1_output_expanded 	= tf.expand_dims(caps1_output, -1,
+												name="caps1_output_expanded")
+		caps1_output_tile 		= tf.expand_dims(caps1_output_expanded, 2,
+												name="caps1_output_tile")
+		caps1_output_tiled 		= tf.tile(caps1_output_tile, [1, 1, caps2_n_caps, 1, 1],
+										 name="caps1_output_tiled")
+
+		print(W_tiled)
+		print(caps1_output_tiled)
+
+		### Yes! Now, to get all the predicted output vectors $\hat{\mathbf{u}}_{j|i}$, 
+		# we just need to multiply these two arrays using tf.matmul(), as explained earlier:
+		caps2_predicted = tf.matmul(W_tiled, caps1_output_tiled, name="caps2_predicted")
+		print(caps2_predicted)
+
+		# Perfect, for each instance in the batch (we don't know the batch size yet, hence the "?") 
+		# and for each pair of first and second layer capsules (1152x10) we have a 16D predicted 
+		# output column vector (16×1). We're ready to apply the routing by agreement algorithm!
+
+
+		# Compute the loss
 		self.cost = tf.identity(0., name='total_costs')
 		summary.add_moving_summary(self.cost)
 	###############################################################################################
