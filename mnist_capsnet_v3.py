@@ -42,7 +42,7 @@ class Model(ModelDesc):
 		print image.get_shape()
 		print label.get_shape()
 		X = image
-		Y = tf.one_hot(label, depth=10, axis=1, dtype=tf.float32)
+		y = label #
 		# In tensorflow, inputs to convolution function are assumed to be
 		# NHWC. Add a single channel here.
 		X = tf.expand_dims(X, 3)
@@ -281,8 +281,84 @@ class Model(ModelDesc):
 		caps2_output_round_2 = squash(weighted_sum_round_2, axis=-2, name="caps2_output_round_2")
 		# We could go on for a few more rounds, by repeating exactly the same steps as in round 2
 		caps2_output = caps2_output_round_2
-		
+
+		#
+		# Estimated Class Probabilities (Length)
+		#
+		# The lengths of the output vectors represent the class probabilities, 
+		# so we could just use tf.norm() to compute them, but as we saw when discussing the squash function, 
+		# it would be risky, so instead let's create our own safe_norm() function:
+		def safe_norm(s, axis=-1, epsilon=1e-7, keep_dims=False, name=None):
+			with tf.name_scope(name, default_name="safe_norm"):
+				squared_norm = tf.reduce_sum(tf.square(s), axis=axis, keep_dims=keep_dims)
+				return tf.sqrt(squared_norm + epsilon)
+
+		y_proba = safe_norm(caps2_output, axis=-2, name="y_proba")		
+
+		# To predict the class of each instance, we can just select the one with the highest estimated probability. 
+		# To do this, let us start by finding its index using tf.argmax():		
+		y_proba_argmax = tf.argmax(y_proba, axis=2, name="y_proba")
+		print(y_proba_argmax)
+
+		# That's what we wanted: for each instance, we now have the index of the longest output vector. 
+		# Let us get rid of the last two dimensions by using tf.squeeze() which removes dimensions of size 1. 
+		# This gives us the capsule network's predicted class for each instance:
+		y_pred = tf.squeeze(y_proba_argmax, axis=[1,2], name="y_pred")
+		print(y_pred)
+
+
+		#
 		# Compute the loss
+		#
+		"""
+		Margin loss
+		"""
+		m_plus = 0.9
+		m_minus = 0.1
+		lambda_ = 0.5
+
+		# Since y will contain the digit classes, from 0 to 9, to get $T_k$ for every instance and every class, 
+		# we can just use the tf.one_hot() function:
+		T = tf.one_hot(y, depth=caps2_n_caps, name="T")
+
+
+		# Now let's compute the norm of the output vector for each output capsule and each instance. 
+		# First, let's verify the shape of caps2_output:
+		print caps2_output
+
+		# The 16D output vectors are in the second to last dimension, 
+		# so let's use the safe_norm() function with axis=-2:
+		caps2_output_norm = safe_norm(caps2_output, axis=-2, keep_dims=True, name="caps2_output_norm")
+
+		# Now let's compute $\max(0, m^{+} - \|\mathbf{v}_k\|)^2$, 
+		# and reshape the result to get a simple matrix of shape (batch size, 10):
+		present_error_raw 	= tf.square(tf.maximum(0., m_plus - caps2_output_norm), name="present_error_raw")
+		present_error 	 	= tf.reshape(present_error_raw, shape=(-1, 10), name="present_error")
+
+		# Next let's compute $\max(0, \|\mathbf{v}_k\| - m^{-})^2$ and reshape it:
+		absent_error_raw 	= tf.square(tf.maximum(0., caps2_output_norm - m_minus), name="absent_error_raw")
+		absent_error 		= tf.reshape(absent_error_raw, shape=(-1, 10), name="absent_error")
+
+
+		# We are ready to compute the loss for each instance and each digit:
+		L = tf.add(T * present_error, lambda_ * (1.0 - T) * absent_error, name="L")
+
+		# Now we can sum the digit losses for each instance ($L_0 + L_1 + ... + L_9$), 
+		# and compute the mean over all instances. This gives us the final margin loss:
+		margin_loss = tf.reduce_mean(tf.reduce_sum(L, axis=1), name="margin_loss")
+
+
+
+		"""
+		Reconstruction
+		"""
+		# Now let's add a decoder network on top of the capsule network. 
+		# It is a regular 3-layer fully connected neural network which will learn to reconstruct the input images 
+		# based on the output of the capsule network. 
+		# This will force the capsule network to preserve all the information required to reconstruct the digits, across the whole network. 
+		# This constraint regularizes the model: it reduces the risk of overfitting the training set, and it helps generalize to new digits.
+		
+
 		self.cost = tf.identity(0., name='total_costs')
 		summary.add_moving_summary(self.cost)
 	###############################################################################################
