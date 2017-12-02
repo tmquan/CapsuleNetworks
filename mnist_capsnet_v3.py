@@ -14,8 +14,8 @@ MNIST CapsNet example.
 os.environ['TENSORPACK_TRAIN_API'] = 'v2'   # will become default soon
 # Just import everything into current namespace
 from tensorpack import *
-from tensorpack.tfutils import summary
 from tensorpack.dataflow import dataset
+from tensorpack.tfutils.summary import add_moving_summary
 
 IMAGE_SIZE = 28
 BATCH_SIZE = 128
@@ -30,7 +30,7 @@ class Model(ModelDesc):
 		the graph will need.
 		"""
 		return [InputDesc(tf.float32, 	(BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE), 'input'),
-				InputDesc(tf.int32, 	(BATCH_SIZE,), 'label')]
+				InputDesc(tf.int64, 	(BATCH_SIZE,), 'label')]
 	###############################################################################################			
 	def _build_graph(self, inputs):
 		"""This function should build the model which takes the input variables
@@ -47,10 +47,7 @@ class Model(ModelDesc):
 		# NHWC. Add a single channel here.
 		X = tf.expand_dims(X, 3)
 
-		X = X/255.0   # Normalize between 0 and 1
 		
-
-
 
 		#
 		### Primary Capsules
@@ -357,10 +354,100 @@ class Model(ModelDesc):
 		# based on the output of the capsule network. 
 		# This will force the capsule network to preserve all the information required to reconstruct the digits, across the whole network. 
 		# This constraint regularizes the model: it reduces the risk of overfitting the training set, and it helps generalize to new digits.
-		
 
-		self.cost = tf.identity(0., name='total_costs')
-		summary.add_moving_summary(self.cost)
+
+		##Mask
+		# The paper mentions that during training, instead of sending all the outputs of the capsule network to the decoder network, 
+		# we must send only the output vector of the capsule that corresponds to the target digit. 
+		# All the other output vectors must be masked out. 
+		# At inference time, we must mask all output vectors except for the longest one, i.e., the one that corresponds to the predicted digit. 
+		
+		# We need a placeholder to tell TensorFlow whether we want to mask the output vectors 
+		# based on the labels (True) or on the predictions (False, the default):
+		mask_with_labels = tf.placeholder_with_default(False, shape=(), name="mask_with_labels")
+
+		# Now let's use tf.cond() to define the reconstruction targets as the labels y if mask_with_labels is True, or y_pred otherwise.
+		reconstruction_targets = tf.cond(mask_with_labels, # condition
+								 lambda: y,        # if True
+								 lambda: y_pred,   # if False
+								 name="reconstruction_targets")
+		"""
+		Note that the tf.cond() function expects the if-True and if-False tensors to be passed via functions: 
+		these functions will be called just once during the graph construction phase (not during the execution phase), similar to tf.while_loop(). 
+		This allows TensorFlow to add the necessary operations to handle the conditional evaluation of the if-True or if-False tensors. 
+		However, in our case, the tensors y and y_pred are already created by the time we call tf.cond(), 
+		so unfortunately TensorFlow will consider both y and y_pred to be dependencies of the reconstruction_targets tensor. 
+		The reconstruction_targets tensor will end up with the correct value, but:
+
+		- whenever we evaluate a tensor that depends on reconstruction_targets, the y_pred tensor will be evaluated (even if mask_with_layers is True). 
+		This is not a big deal because computing y_pred adds no computing overhead during training, since we need it anyway to compute the margin loss. 
+		And during testing, if we are doing classification, we won't need reconstructions, so reconstruction_targets won't be evaluated at all.
+
+		- we will always need to feed a value for the y placeholder (even if mask_with_layers is False). This is a bit annoying, but we can pass an empty array, 
+		because TensorFlow won't use it anyway (it just does not know it yet when it checks for dependencies).
+		"""
+
+		# Now that we have the reconstruction targets, let's create the reconstruction mask. 
+		# It should be equal to 1.0 for the target class, and 0.0 for the other classes, for each instance. 
+		# For this we can just use the tf.one_hot() function:
+		reconstruction_mask = tf.one_hot(reconstruction_targets, depth=caps2_n_caps, name="reconstruction_mask")
+
+		# Let us check the shape of reconstruction_mask:
+		print(reconstruction_mask)
+
+		# Let us compare this to the shape of caps2_output:
+		print(caps2_output)
+
+		# However, its shape is (batch size, 1, 10, 16, 1). 
+		# We want to multiply it by the reconstruction_mask, but the shape of the reconstruction_mask is (batch size, 10). We
+		# must reshape it to (batch size, 1, 10, 1, 1) to make multiplication possible:
+		reconstruction_mask_reshaped = tf.reshape(reconstruction_mask, [-1, 1, caps2_n_caps, 1, 1], name="reconstruction_mask_reshaped")
+
+		# At last! We can apply the mask:
+		caps2_output_masked = tf.multiply(caps2_output, reconstruction_mask_reshaped, name="caps2_output_masked")
+		print(caps2_output_masked)
+
+		# One last reshape operation to flatten the decoder's inputs:
+		decoder_input = tf.reshape(caps2_output_masked, [-1, caps2_n_caps * caps2_n_dims], name="decoder_input")
+		# This gives us an array of shape (batch size, 160):
+		print(decoder_input)
+
+		## Decoder
+		# Now let's build the decoder. It's quite simple: two dense (fully connected) ReLU layers followed by a dense output sigmoid layer:	
+		n_hidden1 = 512
+		n_hidden2 = 1024
+		n_output = 28 * 28
+		with tf.name_scope("decoder"):
+			hidden1 = tf.layers.dense(decoder_input, n_hidden1, activation=tf.nn.relu, name="hidden1")
+			hidden2 = tf.layers.dense(hidden1, n_hidden2, activation=tf.nn.relu, name="hidden2")
+			decoder_output = tf.layers.dense(hidden2, n_output, activation=tf.nn.sigmoid, name="decoder_output")
+		
+		# Reconstruction Loss
+		X_flat = tf.reshape(X, [-1, n_output], name="X_flat")
+		squared_difference = tf.square(X_flat - decoder_output, name="squared_difference")
+		reconstruction_loss = tf.reduce_sum(squared_difference, name="reconstruction_loss")		
+
+
+		## Final Loss
+		# The final loss is the sum of the margin loss and the reconstruction loss 
+		# (scaled down by a factor of 0.0005 to ensure the margin loss dominates training):
+		alpha = 0.0005
+		total_loss = tf.add(margin_loss, alpha * reconstruction_loss, name="total_loss")
+
+		## Final Touches
+		# To measure our model's accuracy, we need to count the number of instances that are properly classified. 
+		# For this, we can simply compare y and y_pred, convert the boolean value to a float32 (0.0 for False, 1.0 for True), 
+		# and compute the mean over all the instances:
+		correct = tf.equal(y, y_pred, name="correct")
+		accuracy = tf.reduce_mean(tf.cast(correct, tf.float32), name="accuracy")
+
+
+		self.cost = tf.identity(total_loss, name='cost')
+		add_moving_summary(accuracy)
+		add_moving_summary(margin_loss)
+		add_moving_summary(reconstruction_loss)
+		add_moving_summary(self.cost)
+		
 	###############################################################################################
 	def _get_optimizer(self):
 		lr = tf.get_variable('learning_rate', initializer=5e-3, trainable=False)
@@ -397,7 +484,7 @@ def get_config():
 				dataset_test,   # the DataFlow instance used for validation
 				ScalarStats([
 							 'margin_loss', 
-							 'reconstruction_err', 
+							 'reconstruction_loss', 
 							 'total_loss'])),
 		],
 		steps_per_epoch=steps_per_epoch,
